@@ -255,7 +255,6 @@ class AccountAssetAsset(models.Model):
             undone_dotation_number += 1
         return undone_dotation_number
 
-    
     def compute_depreciation_board(self):
         self.ensure_one()
 
@@ -287,7 +286,6 @@ class AccountAssetAsset(models.Model):
                 elif self.first_depreciation_manual_date and self.first_depreciation_manual_date != self.date:
                     # depreciation_date set manually from the 'first_depreciation_manual_date' field
                     depreciation_date = self.first_depreciation_manual_date
-
             total_days = (depreciation_date.year % 4) and 365 or 366
             month_day = depreciation_date.day
             undone_dotation_number = self._compute_board_undone_dotation_nb(depreciation_date, total_days)
@@ -348,7 +346,7 @@ class AccountAssetAsset(models.Model):
                 del(tracked_fields['method_end'])
             else:
                 del(tracked_fields['method_number'])
-            dummy, tracking_value_ids = asset._message_track(tracked_fields, dict.fromkeys(fields))
+            dummy, tracking_value_ids = asset._mail_track(tracked_fields, dict.fromkeys(fields))
             asset.message_post(subject=_('Asset created'), tracking_value_ids=tracking_value_ids)
 
     def _return_disposal_view(self, move_ids):
@@ -395,7 +393,7 @@ class AccountAssetAsset(models.Model):
                 commands.append((0, False, vals))
                 asset.write({'depreciation_line_ids': commands, 'method_end': today, 'method_number': sequence})
                 tracked_fields = self.env['account.asset.asset'].fields_get(['method_number', 'method_end'])
-                changes, tracking_value_ids = asset._message_track(tracked_fields, old_values)
+                changes, tracking_value_ids = asset._mail_track(tracked_fields, old_values)
                 if changes:
                     asset.message_post(subject=_('Asset sold or disposed. Accounting entry awaiting for validation.'), tracking_value_ids=tracking_value_ids)
                 move_ids += asset.depreciation_line_ids[-1].create_move(post_move=False)
@@ -523,15 +521,22 @@ class AccountAssetDepreciationLine(models.Model):
 
     name = fields.Char(string='Depreciation Name', required=True, index=True)
     sequence = fields.Integer(required=True)
-    asset_id = fields.Many2one('account.asset.asset', string='Asset', required=True, ondelete='cascade')
-    parent_state = fields.Selection(related='asset_id.state', string='State of Asset')
-    amount = fields.Monetary(string='Current Depreciation', required=True)
-    remaining_value = fields.Monetary(string='Next Period Depreciation', required=True)
-    depreciated_value = fields.Monetary(string='Cumulative Depreciation', required=True)
+    asset_id = fields.Many2one('account.asset.asset', string='Asset',
+                               required=True, ondelete='cascade')
+    parent_state = fields.Selection(related='asset_id.state',
+                                    string='State of Asset')
+    amount = fields.Monetary(string='Current Depreciation',
+                             required=True)
+    remaining_value = fields.Monetary(string='Next Period Depreciation',
+                                      required=True)
+    depreciated_value = fields.Monetary(string='Cumulative Depreciation',
+                                        required=True)
     depreciation_date = fields.Date('Depreciation Date', index=True)
     move_id = fields.Many2one('account.move', string='Depreciation Entry')
-    move_check = fields.Boolean(compute='_get_move_check', string='Linked', store=True)
-    move_posted_check = fields.Boolean(compute='_get_move_posted_check', string='Posted', store=True)
+    move_check = fields.Boolean(compute='_get_move_check', string='Linked',
+                                store=True)
+    move_posted_check = fields.Boolean(compute='_get_move_posted_check',
+                                       string='Posted', store=True)
     currency_id = fields.Many2one('res.currency', string='Currency',
                                   related='asset_id.currency_id',
                                   readonly=True)
@@ -651,6 +656,7 @@ class AccountAssetDepreciationLine(models.Model):
         move = self.env['account.move'].create(self._prepare_move_grouped())
         self.write({'move_id': move.id, 'move_check': True})
         created_moves |= move
+
         if post_move and created_moves:
             created_moves.action_post()
         return [x.id for x in created_moves]

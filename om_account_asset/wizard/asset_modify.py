@@ -55,13 +55,12 @@ class AssetModify(models.TransientModel):
             'method_end': self.method_end,
         }
         if asset_vals['method_number'] <= asset.entry_count:
-            raise UserError(_(
-                'The number of depreciations must be greater than the number of posted or draft entries '
-                'to allow for complete depreciation of the asset.'))
+            raise UserError(_('The number of depreciations must be greater than the number of posted or draft entries '
+                              'to allow for complete depreciation of the asset.'))
         asset.write(asset_vals)
         asset.compute_depreciation_board()
         tracked_fields = self.env['account.asset.asset'].fields_get(['method_number', 'method_period', 'method_end'])
-        changes, tracking_value_ids = asset._message_track(tracked_fields, old_values)
+        changes, tracking_value_ids = asset._mail_track(tracked_fields, old_values)
         if changes:
             asset.message_post(subject=_('Depreciation board modified'), body=self.name, tracking_value_ids=tracking_value_ids)
         return {'type': 'ir.actions.act_window_close'}

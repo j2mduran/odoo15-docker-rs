@@ -31,66 +31,17 @@ class AccountMove(models.Model):
                    ],
         string=_('Tipo de comprobante'),
     )
-    forma_pago = fields.Selection(
-        selection=[('01', '01 - Efectivo'),
-                   ('02', '02 - Cheque nominativo'),
-                   ('03', '03 - Transferencia electrónica de fondos'),
-                   ('04', '04 - Tarjeta de Crédito'),
-                   ('05', '05 - Monedero electrónico'),
-                   ('06', '06 - Dinero electrónico'),
-                   ('08', '08 - Vales de despensa'),
-                   ('12', '12 - Dación en pago'),
-                   ('13', '13 - Pago por subrogación'),
-                   ('14', '14 - Pago por consignación'),
-                   ('15', '15 - Condonación'),
-                   ('17', '17 - Compensación'),
-                   ('23', '23 - Novación'),
-                   ('24', '24 - Confusión'),
-                   ('25', '25 - Remisión de deuda'),
-                   ('26', '26 - Prescripción o caducidad'),
-                   ('27', '27 - A satisfacción del acreedor'),
-                   ('28', '28 - Tarjeta de débito'),
-                   ('29', '29 - Tarjeta de servicios'),
-                   ('30', '30 - Aplicación de anticipos'),
-                   ('31', '31 - Intermediario pagos'),
-                   ('99', '99 - Por definir'), ],
-        string=_('Forma de pago'),
-    )
+    forma_pago_id = fields.Many2one('catalogo.forma.pago', string='Forma de pago')
     methodo_pago = fields.Selection(
         selection=[('PUE', _('Pago en una sola exhibición')),
                    ('PPD', _('Pago en parcialidades o diferido')), ],
         string=_('Método de pago'),
     )
-    uso_cfdi = fields.Selection(
-        selection=[('G01', _('Adquisición de mercancías')),
-                   ('G02', _('Devoluciones, descuentos o bonificaciones')),
-                   ('G03', _('Gastos en general')),
-                   ('I01', _('Construcciones')),
-                   ('I02', _('Mobiliario y equipo de oficina por inversiones')),
-                   ('I03', _('Equipo de transporte')),
-                   ('I04', _('Equipo de cómputo y accesorios')),
-                   ('I05', _('Dados, troqueles, moldes, matrices y herramental')),
-                   ('I06', _('Comunicacion telefónica')),
-                   ('I07', _('Comunicación Satelital')),
-                   ('I08', _('Otra maquinaria y equipo')),
-                   ('D01', _('Honorarios médicos, dentales y gastos hospitalarios')),
-                   ('D02', _('Gastos médicos por incapacidad o discapacidad')),
-                   ('D03', _('Gastos funerales')),
-                   ('D04', _('Donativos')),
-                   ('D05', _('Intereses reales efectivamente pagados por créditos hipotecarios (casa habitación).')),
-                   ('D06', _('Aportaciones voluntarias al SAR.')),
-                   ('D07', _('Primas por seguros de gastos médicos')),
-                   ('D08', _('Gastos de transportación escolar obligatoria')),
-                   ('D09', _('Depósitos en cuentas para el ahorro, primas que tengan como base planes de pensiones')),
-                   ('D10', _('Pagos por servicios educativos (colegiaturas)')),
-                   ('S01', _('Sin efectos fiscales')),
-                   ('P01', _('Por definir (obsoleto)')), ],
-        string=_('Uso CFDI (cliente)'),
-    )
+    uso_cfdi_id = fields.Many2one('catalogo.uso.cfdi', string='Uso CFDI (cliente)')
     estado_factura = fields.Selection(
         selection=[('factura_no_generada', 'Factura no generada'), ('factura_correcta', 'Factura correcta'),
                    ('solicitud_cancelar', 'Cancelación en proceso'), ('factura_cancelada', 'Factura cancelada'),
-                   ('solicitud_rechazada', 'Cancelación rechazada')],
+                   ('solicitud_rechazada', 'Cancelación rechazada'), ],
         string=_('Estado de factura'),
         default='factura_no_generada',
         readonly=True
@@ -177,9 +128,9 @@ class AccountMove(models.Model):
         if self.estado_factura == 'factura_correcta':
             values['uuid_relacionado'] = self.folio_fiscal
             values['methodo_pago'] = 'PUE'
-            values['forma_pago'] = self.forma_pago
+            values['forma_pago_id'] = self.forma_pago_id.id
             values['tipo_comprobante'] = 'E'
-            values['uso_cfdi'] = 'G02'
+            values['uso_cfdi_id'] = self.env['catalogo.uso.cfdi'].sudo().search([('code', '=', 'G02')]).id
             values['tipo_relacion'] = '01'
             values['fecha_factura'] = None
             values['qrcode_image'] = None
@@ -189,6 +140,7 @@ class AccountMove(models.Model):
             values['folio_fiscal'] = None
             values['estado_factura'] = 'factura_no_generada'
             values['factura_cfdi'] = False
+            values['edi_document_ids'] = None
         return values
 
     @api.returns('self', lambda value: value.id)
@@ -226,7 +178,7 @@ class AccountMove(models.Model):
     def _get_uso_cfdi(self):
         if self.partner_id:
             values = {
-                'uso_cfdi': self.partner_id.uso_cfdi
+                'uso_cfdi_id': self.partner_id.uso_cfdi_id.id
             }
             self.update(values)
 
@@ -236,17 +188,17 @@ class AccountMove(models.Model):
             if self.invoice_payment_term_id.methodo_pago == 'PPD':
                 values = {
                     'methodo_pago': self.invoice_payment_term_id.methodo_pago,
-                    'forma_pago': '99'
+                    'forma_pago_id': self.env['catalogo.forma.pago'].sudo().search([('code', '=', '99')])
                 }
             else:
                 values = {
                     'methodo_pago': self.invoice_payment_term_id.methodo_pago,
-                    'forma_pago': False
+                    'forma_pago_id': False
                 }
         else:
             values = {
                 'methodo_pago': False,
-                'forma_pago': False
+                'forma_pago_id': False
             }
         self.update(values)
 
@@ -295,7 +247,7 @@ class AccountMove(models.Model):
                 'serie': self.journal_id.serie_diario or self.company_id.serie_factura,
                 'folio': str(re.sub('[^0-9]','', self.name)),
                 'fecha_expedicion': date_from,
-                'forma_pago': self.forma_pago,
+                'forma_pago': self.forma_pago_id.code,
                 'subtotal': self.amount_untaxed,
                 'descuento': 0,
                 'moneda': self.currency_id.name,
@@ -310,7 +262,7 @@ class AccountMove(models.Model):
             'emisor': {
                 'rfc': self.company_id.vat.upper(),
                 'nombre': self.company_id.nombre_fiscal.upper(),
-                'RegimenFiscal': self.company_id.regimen_fiscal,
+                'RegimenFiscal': self.company_id.regimen_fiscal_id.code,
                 'FacAtrAdquirente': self.facatradquirente,
             },
             'receptor': {
@@ -318,13 +270,13 @@ class AccountMove(models.Model):
                 'rfc': self.partner_id.vat.upper(),
                 'ResidenciaFiscal': self.partner_id.residencia_fiscal,
                 'NumRegIdTrib': self.partner_id.registro_tributario,
-                'UsoCFDI': self.uso_cfdi,
-                'RegimenFiscalReceptor': self.partner_id.regimen_fiscal,
+                'UsoCFDI': self.uso_cfdi_id.code,
+                'RegimenFiscalReceptor': self.partner_id.regimen_fiscal_id.code,
                 'DomicilioFiscalReceptor': zipreceptor,
             },
             'informacion': {
                 'cfdi': '4.0',
-                'sistema': 'odoo14',
+                'sistema': 'odoo15',
                 'version': '1',
                 'api_key': self.company_id.proveedor_timbrado,
                 'modo_prueba': self.company_id.modo_prueba,
@@ -518,8 +470,8 @@ class AccountMove(models.Model):
         tax_local_ret_tot = round(tax_local_ret_tot, no_decimales)
         self.discount = round(self.discount, no_decimales)
         self.subtotal = self.roundTraditional(self.subtotal, no_decimales)
+        impuestos = {}
         if tax_grouped_tras or tax_grouped_ret:
-            impuestos = {}
             retenciones = []
             traslados = []
             if tax_grouped_tras:
@@ -554,7 +506,7 @@ class AccountMove(models.Model):
                 impuestos.update(
                     {'retenciones': retenciones, 'TotalImpuestosRetenidos': self.set_decimals(ret_tot, no_decimales)})
             request_params.update({'impuestos': impuestos})
-            self.tax_payment = json.dumps(impuestos)
+        self.tax_payment = json.dumps(impuestos)
 
         if tax_local_ret or tax_local_tras:
             if tax_local_tras and not tax_local_ret:
@@ -617,7 +569,7 @@ class AccountMove(models.Model):
             self.write({'proceso_timbrado': False})
             self.env.cr.commit()
             raise UserError(_('El receptor no tiene nombre configurado.'))
-        if not self.uso_cfdi:
+        if not self.uso_cfdi_id:
             self.write({'proceso_timbrado': False})
             self.env.cr.commit()
             raise UserError(_('La factura no tiene uso de cfdi configurado.'))
@@ -629,11 +581,11 @@ class AccountMove(models.Model):
             self.write({'proceso_timbrado': False})
             self.env.cr.commit()
             raise UserError(_('La factura no tiene método de pago configurado.'))
-        if self.tipo_comprobante != 'T' and not self.forma_pago:
+        if self.tipo_comprobante != 'T' and not self.forma_pago_id:
             self.write({'proceso_timbrado': False})
             self.env.cr.commit()
             raise UserError(_('La factura no tiene forma de pago configurado.'))
-        if not self.company_id.regimen_fiscal:
+        if not self.company_id.regimen_fiscal_id:
             self.write({'proceso_timbrado': False})
             self.env.cr.commit()
             raise UserError(_('El emisor no régimen fiscal configurado.'))
@@ -745,15 +697,15 @@ class AccountMove(models.Model):
                 invoice.write({'proceso_timbrado': False})
                 self.env.cr.commit()
                 if "Name or service not known" in error or "Failed to establish a new connection" in error:
-                    raise Warning("No se pudo conectar con el servidor.")
+                    raise UserError(_("No se pudo conectar con el servidor."))
                 else:
-                    raise Warning(error)
+                    raise UserError(_(error))
 
             if "Whoops, looks like something went wrong." in response.text:
                 invoice.write({'proceso_timbrado': False})
                 self.env.cr.commit()
-                raise Warning(
-                    "Error en el proceso de timbrado, espere un minuto y vuelva a intentar timbrar nuevamente. \nSi el error aparece varias veces reportarlo con la persona de sistemas.")
+                raise UserError(_(
+                    "Error en el proceso de timbrado, espere un minuto y vuelva a intentar timbrar nuevamente. \nSi el error aparece varias veces reportarlo con la persona de sistemas."))
             else:
                 json_response = response.json()
             estado_factura = json_response['estado_factura']
@@ -834,13 +786,13 @@ class AccountMove(models.Model):
                 except Exception as e:
                     error = str(e)
                     if "Name or service not known" in error or "Failed to establish a new connection" in error:
-                        raise Warning("No se pudo conectar con el servidor.")
+                        raise UserError(_("No se pudo conectar con el servidor."))
                     else:
-                        raise Warning(error)
+                        raise UserError(_(error))
 
                 if "Whoops, looks like something went wrong." in response.text:
-                    raise Warning(
-                        "Error en el proceso de timbrado, espere un minuto y vuelva a intentar timbrar nuevamente. \nSi el error aparece varias veces reportarlo con la persona de sistemas.")
+                    raise UserError(_(
+                        "Error en el proceso de timbrado, espere un minuto y vuelva a intentar timbrar nuevamente. \nSi el error aparece varias veces reportarlo con la persona de sistemas."))
 
                 json_response = response.json()
 
@@ -975,8 +927,8 @@ class AccountMove(models.Model):
                                          headers={"Content-type": "application/json"})
 
                 if "Whoops, looks like something went wrong." in response.text:
-                    raise Warning(
-                        "Error con el servidor de facturación, favor de reportar el error a su persona de soporte.")
+                    raise UserError(_(
+                        "Error con el servidor de facturación, favor de reportar el error a su persona de soporte."))
 
                 json_response = response.json()
             except Exception as e:
@@ -997,41 +949,6 @@ class AccountMove(models.Model):
                 'res_id': message_id.id,
                 'target': 'new'
             }
-
-    def _get_reconciled_info_JSON_values(self):
-        self.ensure_one()
-
-        reconciled_vals = []
-        for partial, amount, counterpart_line in self._get_reconciled_invoices_partials():
-            if counterpart_line.move_id.ref:
-                reconciliation_ref = '%s (%s)' % (counterpart_line.move_id.name, counterpart_line.move_id.ref)
-            else:
-                reconciliation_ref = counterpart_line.move_id.name
-
-            foreign_currency = self.currency_id if self.currency_id != self.company_id.currency_id else False
-            if foreign_currency and partial.debit_currency_id == foreign_currency:
-                amount_mxn = partial.amount * self.currency_id.with_context(date=counterpart_line.date).rate
-            else:
-                amount_mxn = partial.amount
-
-            reconciled_vals.append({
-                'name': counterpart_line.name,
-                'journal_name': counterpart_line.journal_id.name,
-                'amount': amount,
-                'amount_mxn': amount_mxn,
-                'currency': self.currency_id.symbol,
-                'digits': [69, self.currency_id.decimal_places],
-                'position': self.currency_id.position,
-                'date': counterpart_line.date,
-                'payment_id': counterpart_line.id,
-                'partial_id': partial.id,
-                'account_payment_id': counterpart_line.payment_id.id,
-                'payment_method_name': counterpart_line.payment_id.payment_method_id.name if counterpart_line.journal_id.type == 'bank' else None,
-                'move_id': counterpart_line.move_id.id,
-                'ref': reconciliation_ref,
-            })
-        return reconciled_vals
-
 
 class MailTemplate(models.Model):
     "Templates for sending email"

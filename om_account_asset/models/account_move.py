@@ -18,12 +18,10 @@ class AccountMove(models.Model):
             if any(asset_id.state != 'draft' for asset_id in move.asset_ids):
                 raise ValidationError(_(
                     'You cannot reset to draft for an entry having a posted asset'))
-            assets = self.env['account.asset.asset'].sudo().search(
-                [('invoice_id', 'in', self.ids)])
-            if assets:
-                assets.sudo().write({'active': False})
-                for asset in assets:
-                    asset.sudo().message_post(body=_("Vendor bill reset to draft."))
+            if move.asset_ids:
+                move.asset_ids.sudo().write({'active': False})
+                for asset in move.asset_ids:
+                    asset.sudo().message_post(body=_("Vendor bill cancelled."))
         return res
 
     @api.model
@@ -59,17 +57,11 @@ class AccountMove(models.Model):
 class AccountMoveLine(models.Model):
     _inherit = 'account.move.line'
 
-    asset_category_id = fields.Many2one('account.asset.category',
-                                        string='Asset Category')
-    asset_start_date = fields.Date(string='Asset Start Date',
-                                   compute='_get_asset_date',
-                                   readonly=True, store=True)
-    asset_end_date = fields.Date(string='Asset End Date',
-                                 compute='_get_asset_date',
-                                 readonly=True, store=True)
-    asset_mrr = fields.Monetary(string='Monthly Recurring Revenue',
-                                compute='_get_asset_date', readonly=True,
-                                store=True)
+    asset_category_id = fields.Many2one('account.asset.category', string='Asset Category')
+    asset_start_date = fields.Date(string='Asset Start Date', compute='_get_asset_date', readonly=True, store=True)
+    asset_end_date = fields.Date(string='Asset End Date', compute='_get_asset_date', readonly=True, store=True)
+    asset_mrr = fields.Float(string='Monthly Recurring Revenue', compute='_get_asset_date', readonly=True,
+                             store=True)
 
     @api.model
     def default_get(self, fields):
@@ -103,6 +95,7 @@ class AccountMoveLine(models.Model):
                         self.company_id,
                         self.move_id.invoice_date or fields.Date.context_today(
                             self))
+
                     rec.asset_mrr = price_subtotal / months
                 if rec.move_id.invoice_date:
                     start_date = rec.move_id.invoice_date.replace(day=1)
@@ -112,11 +105,12 @@ class AccountMoveLine(models.Model):
 
     def asset_create(self):
         if self.asset_category_id:
-            price_subtotal = self.currency_id._convert(self.price_subtotal,
-                                                       self.company_currency_id,
-                                                       self.company_id,
-                                                       self.move_id.invoice_date or fields.Date.context_today(
-                                                           self))
+            price_subtotal = self.currency_id._convert(
+                self.price_subtotal,
+                self.company_currency_id,
+                self.company_id,
+                self.move_id.invoice_date or fields.Date.context_today(
+                    self))
             vals = {
                 'name': self.name,
                 'code': self.name or False,
@@ -125,7 +119,7 @@ class AccountMoveLine(models.Model):
                 'partner_id': self.move_id.partner_id.id,
                 'company_id': self.move_id.company_id.id,
                 'currency_id': self.move_id.company_currency_id.id,
-                'date': self.move_id.invoice_date,
+                'date': self.move_id.invoice_date or self.move_id.date,
                 'invoice_id': self.move_id.id,
             }
             changed_vals = self.env['account.asset.asset'].onchange_category_id_values(vals['category_id'])
@@ -156,9 +150,9 @@ class AccountMoveLine(models.Model):
         for rec in self:
             if rec.product_id:
                 if rec.move_id.move_type == 'out_invoice':
-                    rec.asset_category_id = rec.product_id.product_tmpl_id.deferred_revenue_category_id
+                    rec.asset_category_id = rec.product_id.product_tmpl_id.deferred_revenue_category_id.id
                 elif rec.move_id.move_type == 'in_invoice':
-                    rec.asset_category_id = rec.product_id.product_tmpl_id.asset_category_id
+                    rec.asset_category_id = rec.product_id.product_tmpl_id.asset_category_id.id
         return vals
 
     def get_invoice_line_account(self, type, product, fpos, company):

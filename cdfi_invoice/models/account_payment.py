@@ -20,7 +20,7 @@ class AccountRegisterPayment(models.TransientModel):
     
     def validate_complete_payment(self):
         for rec in self:
-            payments = rec._create_payments()
+            rec.action_create_payments()
             return {
                'name': _('Payments'),
                'view_type': 'form',
@@ -28,7 +28,7 @@ class AccountRegisterPayment(models.TransientModel):
                'res_model': 'account.payment',
                'view_id': False,
                'type': 'ir.actions.act_window',
-               'res_id': payments.id,
+               'res_id': rec.id,
            }
 
     def _create_payment_vals_from_wizard(self):
@@ -46,29 +46,8 @@ class AccountRegisterPayment(models.TransientModel):
 class AccountPayment(models.Model):
     _inherit = 'account.payment'
 
-    forma_pago = fields.Selection(selection=[('01', '01 - Efectivo'), 
-                   ('02', '02 - Cheque nominativo'), 
-                   ('03', '03 - Transferencia electrónica de fondos'),
-                   ('04', '04 - Tarjeta de Crédito'), 
-                   ('05', '05 - Monedero electrónico'),
-                   ('06', '06 - Dinero electrónico'), 
-                   ('08', '08 - Vales de despensa'), 
-                   ('12', '12 - Dación en pago'), 
-                   ('13', '13 - Pago por subrogación'), 
-                   ('14', '14 - Pago por consignación'), 
-                   ('15', '15 - Condonación'), 
-                   ('17', '17 - Compensación'), 
-                   ('23', '23 - Novación'), 
-                   ('24', '24 - Confusión'), 
-                   ('25', '25 - Remisión de deuda'), 
-                   ('26', '26 - Prescripción o caducidad'), 
-                   ('27', '27 - A satisfacción del acreedor'), 
-                   ('28', '28 - Tarjeta de débito'), 
-                   ('29', '29 - Tarjeta de servicios'), 
-                   ('30', '30 - Aplicación de anticipos'),
-                   ('31', '31 - Intermediario pagos'), ],
-                                string=_('Forma de pago'), 
-                            )
+    forma_pago_id  =  fields.Many2one('catalogo.forma.pago', string='Forma de pago')
+
     methodo_pago = fields.Selection(
         selection=[('PUE', _('Pago en una sola exhibición')),
                    ('PPD', _('Pago en parcialidades o diferido')),],
@@ -167,12 +146,12 @@ class AccountPayment(models.Model):
         if self.journal_id:
             self.currency_id = self.journal_id.currency_id or self.company_id.currency_id
             # Set default payment method (we consider the first to be the default one)
-            payment_methods = self.payment_type == 'inbound' and self.journal_id.inbound_payment_method_ids or self.journal_id.outbound_payment_method_ids
-            self.payment_method_id = payment_methods and payment_methods[0] or False
+            payment_methods = self.payment_type == 'inbound' and self.journal_id.inbound_payment_method_line_ids or self.journal_id.outbound_payment_method_line_ids
+            self.payment_method_line_id = payment_methods and payment_methods[0] or False
             # Set payment method domain (restrict to methods enabled for the journal and to selected payment type)
             payment_type = self.payment_type in ('outbound', 'transfer') and 'outbound' or 'inbound'
-            self.forma_pago = self.journal_id.forma_pago
-            return {'domain': {'payment_method_id': [('payment_type', '=', payment_type), ('id', 'in', payment_methods.ids)]}}
+            self.forma_pago_id = self.journal_id.forma_pago_id.id
+            return {'domain': {'payment_method_line_id': [('payment_type', '=', payment_type), ('id', 'in', payment_methods.ids)]}}
         return {}
     
    # @api.onchange('date')
@@ -187,40 +166,60 @@ class AccountPayment(models.Model):
           docto_relacionados = []
           tax_grouped_tras = {}
           tax_grouped_ret = {}
+          mxn_currency = self.env["res.currency"].search([('name', '=', 'MXN')], limit=1)
+
           if payment.reconciled_invoice_ids:
-            for invoice in payment.reconciled_invoice_ids:
-                if invoice.factura_cfdi:
-                    payment_dict = json.loads(invoice.invoice_payments_widget)
-                    payment_content = payment_dict['content']
-                    monto_pagado = 0
-                    for invoice_payments in payment_content:
-                        if invoice_payments['account_payment_id'] == payment.id:
-                            monto_pagado = invoice_payments['amount_mxn']
+            invoice_vals_list = []
+            pay_rec_lines = payment.move_id.line_ids.filtered(lambda line: line.account_internal_type in ('receivable', 'payable'))
 
-                    #revisa la cantidad que se va a pagar en el docuemnto
-                    if payment.currency_id.name != invoice.moneda:
-                        if payment.currency_id.name == 'MXN':
-                            equivalenciadr = round(invoice.currency_id.with_context(date=payment.date).rate,6)
-                        else:
-                            equivalenciadr = round(float(invoice.tipocambio)/float(payment.currency_id.with_context(date=payment.date).rate),6)
-                    else:
-                        equivalenciadr = 1
+            if payment.currency_id == mxn_currency:
+               rate_payment_curr_mxn = None
+               paid_amount_comp_curr = payment.amount
+            else:
+               rate_payment_curr_mxn = payment.currency_id._convert(1.0, mxn_currency, payment.company_id, payment.date, round=False)
+               paid_amount_comp_curr = payment.currency_id.round(payment.amount * rate_payment_curr_mxn)
 
-                    decimal_p = 6
+            for field1, field2 in (('debit', 'credit'), ('credit', 'debit')):
+               for partial in pay_rec_lines[f'matched_{field1}_ids']:
+                   payment_line = partial[f'{field2}_move_id']
+                   invoice_line = partial[f'{field1}_move_id']
+                   invoice_amount = partial[f'{field1}_amount_currency']
+                   invoice = invoice_line.move_id
+                   decimal_p = 6
 
-                    if not invoice.total_factura > 0:
-                       raise Warning("No hay información del monto de la factura. Carga el XML en la factura para agregar el monto total.")
+                   if not invoice.factura_cfdi:
+                       continue
 
-                    paid_pct = payment.truncate(monto_pagado, decimal_p) / invoice.total_factura
-                    monto_pagado = payment.truncate(monto_pagado, 2)
+                   payment_dict = json.loads(invoice.invoice_payments_widget)
+                   payment_content = payment_dict['content']
 
-                    if not invoice.tax_payment:
-                       raise Warning("No hay información de impuestos en el documento. Carga el XML en la factura para agregar los impuestos.")
-                    taxes = json.loads(invoice.tax_payment)
-                    objetoimpdr = '01'
-                    trasladodr = []
-                    retenciondr = []
-                    if "translados" in taxes:
+                   if invoice.total_factura <= 0:
+                       raise UserError("No hay monto total de la factura. Carga el XML en la factura para agregar el monto total.")
+
+                   if invoice.currency_id == payment_line.currency_id:
+                       amount_paid_invoice_curr = invoice_amount
+                       equivalenciadr = 1
+                   elif invoice.currency_id == mxn_currency and invoice.currency_id != payment_line.currency_id:
+                       amount_paid_invoice_curr = invoice_amount
+                       amount_paid_invoice_comp_curr = payment_line.company_currency_id.round(payment.amount  * (abs(payment_line.balance) / paid_amount_comp_curr))
+                       invoice_rate = partial.debit_amount_currency / partial.amount
+                       exchange_rate = amount_paid_invoice_curr / amount_paid_invoice_comp_curr
+                       equivalenciadr = payment.roundTraditional(exchange_rate, decimal_p) + 0.000001
+                   else:
+                       amount_paid_invoice_comp_curr = payment_line.company_currency_id.round(payment.amount  * (abs(payment_line.balance) / paid_amount_comp_curr))
+                       invoice_rate = partial.debit_amount_currency / partial.amount
+                       amount_paid_invoice_curr = invoice.currency_id.round(abs(payment_line.balance) * invoice_rate)
+                       exchange_rate = amount_paid_invoice_curr / amount_paid_invoice_comp_curr
+                       equivalenciadr = payment.roundTraditional(exchange_rate, decimal_p) + 0.000001
+                   paid_pct = payment.truncate(amount_paid_invoice_curr, decimal_p) / invoice.total_factura
+
+                   if not invoice.tax_payment:
+                       raise UserError("No hay información de impuestos en el documento. Carga el XML en la factura para agregar los impuestos.")
+                   taxes = json.loads(invoice.tax_payment)
+                   objetoimpdr = '01'
+                   trasladodr = []
+                   retenciondr = []
+                   if "translados" in taxes:
                        objetoimpdr = '02'
                        traslados = taxes['translados']
                        for traslado in traslados:
@@ -252,7 +251,7 @@ class AccountPayment(models.Model):
                            else:
                                tax_grouped_tras[key]['BaseP'] += basep
                                tax_grouped_tras[key]['ImporteP'] += importep
-                    if "retenciones" in taxes:
+                   if "retenciones" in taxes:
                        objetoimpdr = '02'
                        retenciones = taxes['retenciones']
                        for retencion in retenciones:
@@ -278,21 +277,19 @@ class AccountPayment(models.Model):
                            else:
                                tax_grouped_ret[key]['ImporteP'] += importep
 
-                    if objetoimpdr == '02' and not trasladodr and not retenciondr:
-                       raise Warning("No hay información de impuestos en el documento. Carga el XML en la factura para agregar los impuestos.")
-
-                    docto_relacionados.append({
+                   docto_relacionados.append({
                           'MonedaDR': invoice.moneda,
                           'EquivalenciaDR': equivalenciadr,
                           'IdDocumento': invoice.folio_fiscal,
                           'folio_facura': invoice.number_folio,
-                          'NumParcialidad': len(payment_content), 
-                          'ImpSaldoAnt': payment.set_decimals(invoice.amount_residual + monto_pagado, no_decimales),
-                          'ImpPagado': payment.set_decimals(monto_pagado, no_decimales),
-                          'ImpSaldoInsoluto': payment.set_decimals(invoice.amount_residual, no_decimales),
+                          'NumParcialidad': len(payment_content),
+                          'ImpSaldoAnt': payment.roundTraditional(min(invoice.amount_residual + amount_paid_invoice_curr, invoice.amount_total), no_decimales),
+                          'ImpPagado': payment.roundTraditional(amount_paid_invoice_curr, no_decimales),
+                          'ImpSaldoInsoluto': payment.roundTraditional(min(invoice.amount_residual + amount_paid_invoice_curr, invoice.amount_total), no_decimales) - \
+                                              payment.roundTraditional(amount_paid_invoice_curr, no_decimales),
                           'ObjetoImpDR': objetoimpdr,
                           'ImpuestosDR': {'traslados': trasladodr, 'retenciones': retenciondr,},
-                    })
+                   })
 
             payment.write({'docto_relacionados': json.dumps(docto_relacionados), 
                         'retencionesp': json.dumps(tax_grouped_ret), 
@@ -301,7 +298,7 @@ class AccountPayment(models.Model):
     def post(self):
         res = super(AccountPayment, self).post()
         for rec in self:
-            rec.add_resitual_amounts()
+    #        rec.add_resitual_amounts()
             rec._onchange_payment_date()
             rec._onchange_journal()
         return res
@@ -362,7 +359,7 @@ class AccountPayment(models.Model):
         #timezone = tools.ustr(timezone).encode('utf-8')
 
         if not self.fecha_pago:
-            raise Warning("Falta configurar fecha de pago en la sección de CFDI del documento.")
+            raise UserError(_('Falta configurar fecha de pago en la sección de CFDI del documento.'))
         else:
             local = pytz.timezone(timezone)
             naive_from = self.fecha_pago
@@ -440,18 +437,18 @@ class AccountPayment(models.Model):
         pagos = []
         pagos.append({
                       'FechaPago': date_from,
-                      'FormaDePagoP': self.forma_pago,
+                      'FormaDePagoP': self.forma_pago_id.code,
                       'MonedaP': self.monedap,
                       'TipoCambioP': self.tipocambiop, # if self.monedap != 'MXN' else '1',
                       'Monto':  self.set_decimals(self.amount, no_decimales),
                       #'Monto':  self.set_decimals(self.total_pago/float(self.tipocambiop), no_decimales),
                       'NumOperacion': self.numero_operacion,
 
-                      'RfcEmisorCtaOrd': self.rfc_banco_emisor if self.forma_pago in ['02', '03', '04', '05', '28', '29'] else '',
-                      'NomBancoOrdExt': self.banco_emisor if self.forma_pago in ['02', '03', '04', '05', '28', '29'] else '',
-                      'CtaOrdenante': self.cuenta_emisor.acc_number if self.cuenta_emisor and self.forma_pago in ['02', '03', '04', '05', '28', '29'] else '',
-                      'RfcEmisorCtaBen': self.rfc_banco_receptor if self.forma_pago in ['02', '03', '04', '05', '28', '29'] else '',
-                      'CtaBeneficiario': self.cuenta_beneficiario if self.forma_pago in ['02', '03', '04', '05', '28', '29'] else '',
+                      'RfcEmisorCtaOrd': self.rfc_banco_emisor if self.forma_pago_id in ['02', '03', '04', '05', '28', '29'] else '',
+                      'NomBancoOrdExt': self.banco_emisor if self.forma_pago_id in ['02', '03', '04', '05', '28', '29'] else '',
+                      'CtaOrdenante': self.cuenta_emisor.acc_number if self.cuenta_emisor and self.forma_pago_id in ['02', '03', '04', '05', '28', '29'] else '',
+                      'RfcEmisorCtaBen': self.rfc_banco_receptor if self.forma_pago_id in ['02', '03', '04', '05', '28', '29'] else '',
+                      'CtaBeneficiario': self.cuenta_beneficiario if self.forma_pago_id in ['02', '03', '04', '05', '28', '29'] else '',
                       'DoctoRelacionado': json.loads(self.docto_relacionados),
                       'ImpuestosP': impuestosp,
                     })
@@ -459,7 +456,7 @@ class AccountPayment(models.Model):
         if self.reconciled_invoice_ids:
             request_params = {
                 'factura': {
-                      'serie': self.company_id.serie_complemento,
+                      'serie': self.journal_id.serie_diario or self.company_id.serie_complemento,
                       'folio': self.name.replace('CUST.IN','').replace('/',''),
                       'fecha_expedicion': date_payment,
                       'subtotal': '0',
@@ -473,7 +470,7 @@ class AccountPayment(models.Model):
                 'emisor': {
                       'rfc': self.company_id.vat.upper(),
                       'nombre': self.company_id.nombre_fiscal.upper(),
-                      'RegimenFiscal': self.company_id.regimen_fiscal,
+                      'RegimenFiscal': self.company_id.regimen_fiscal_id.code,
                 },
                 'receptor': {
                       'nombre': self.partner_id.name.upper(),
@@ -481,13 +478,13 @@ class AccountPayment(models.Model):
                       'ResidenciaFiscal': self.partner_id.residencia_fiscal,
                       'NumRegIdTrib': self.partner_id.registro_tributario,
                       'UsoCFDI': 'CP01',
-                      'RegimenFiscalReceptor': self.partner_id.regimen_fiscal,
+                      'RegimenFiscalReceptor': self.partner_id.regimen_fiscal_id.code,
                       'DomicilioFiscalReceptor': zipreceptor,
                 },
 
                 'informacion': {
                       'cfdi': '4.0',
-                      'sistema': 'odoo14',
+                      'sistema': 'odoo15',
                       'version': '6',
                       'api_key': self.company_id.proveedor_timbrado,
                       'modo_prueba': self.company_id.modo_prueba,
@@ -511,7 +508,7 @@ class AccountPayment(models.Model):
               request_params.update({'CfdisRelacionados': {'UUID': cfdi_relacionado, 'TipoRelacion':self.tipo_relacion }})
 
         else:
-            raise Warning("No tiene ninguna factura ligada al documento de pago, debe al menos tener una factura ligada. \n Desde la factura crea el pago para que se asocie la factura al pago.")
+            raise UserError(_('No tiene ninguna factura ligada al documento de pago, debe al menos tener una factura ligada. \n Desde la factura crea el pago para que se asocie la factura al pago.'))
         return request_params
 
     def check_cfdi_values(self):
@@ -521,11 +518,11 @@ class AccountPayment(models.Model):
             raise UserError(_('El emisor no tiene nombre configurado.'))
         if not self.partner_id.vat:
             raise UserError(_('El receptor no tiene RFC configurado.'))
-        if not self.company_id.regimen_fiscal:
+        if not self.company_id.regimen_fiscal_id:
             raise UserError(_('El emisor no régimen fiscal configurado.'))
         if not self.journal_id.codigo_postal and not self.company_id.zip:
             raise UserError(_('El emisor no tiene código postal configurado.'))
-        if not self.forma_pago:
+        if not self.forma_pago_id:
             raise UserError(_('Falta configurar la forma de pago.'))
 
     def set_decimals(self, amount, precision):
@@ -567,12 +564,12 @@ class AccountPayment(models.Model):
             except Exception as e:
                 error = str(e)
                 if "Name or service not known" in error or "Failed to establish a new connection" in error:
-                     raise Warning("Servidor fuera de servicio, favor de intentar mas tarde")
+                     raise UserError(_('Servidor fuera de servicio, favor de intentar mas tarde'))
                 else:
-                     raise Warning(error)
+                     raise UserError(_(error))
 
             if "Whoops, looks like something went wrong." in response.text:
-                raise Warning("Error en el proceso de timbrado, espere un minuto y vuelva a intentar timbrar nuevamente. \nSi el error aparece varias veces reportarlo con la persona de sistemas.")
+                raise UserError(_('Error en el proceso de timbrado, espere un minuto y vuelva a intentar timbrar nuevamente. \nSi el error aparece varias veces reportarlo con la persona de sistemas.'))
             else:
                 json_response = response.json()
             xml_file_link = False
@@ -727,7 +724,7 @@ class AccountPayment(models.Model):
                                   'contrasena': p.company_id.contrasena,
                             },
                           'xml': xml_file.datas.decode("utf-8"),
-                          'motivo': self.env.context.get('motivo_cancelacion',False),
+                          'motivo': self.env.context.get('motivo_cancelacion','02'),
                           'foliosustitucion': self.env.context.get('foliosustitucion',''),
                           }
                 if p.company_id.proveedor_timbrado == 'multifactura':
@@ -835,29 +832,4 @@ class AccountPaymentTerm(models.Model):
                    ('PPD', _('Pago en parcialidades o diferido')),],
         string=_('Método de pago'), 
     )
-
-    forma_pago = fields.Selection(
-        selection=[('01', '01 - Efectivo'), 
-                   ('02', '02 - Cheque nominativo'), 
-                   ('03', '03 - Transferencia electrónica de fondos'),
-                   ('04', '04 - Tarjeta de Crédito'), 
-                   ('05', '05 - Monedero electrónico'),
-                   ('06', '06 - Dinero electrónico'), 
-                   ('08', '08 - Vales de despensa'), 
-                   ('12', '12 - Dación en pago'), 
-                   ('13', '13 - Pago por subrogación'), 
-                   ('14', '14 - Pago por consignación'), 
-                   ('15', '15 - Condonación'), 
-                   ('17', '17 - Compensación'), 
-                   ('23', '23 - Novación'), 
-                   ('24', '24 - Confusión'), 
-                   ('25', '25 - Remisión de deuda'), 
-                   ('26', '26 - Prescripción o caducidad'), 
-                   ('27', '27 - A satisfacción del acreedor'), 
-                   ('28', '28 - Tarjeta de débito'), 
-                   ('29', '29 - Tarjeta de servicios'), 
-                   ('30', '30 - Aplicación de anticipos'),
-                   ('31', '31 - Intermediario pagos'),
-                   ('99', '99 - Por definir'),],
-        string=_('Forma de pago'),
-    )
+    forma_pago_id  =  fields.Many2one('catalogo.forma.pago', string='Forma de pago')

@@ -111,7 +111,7 @@
 									<span t-field="o.company_id.vat" />
 								</div>
 								<div>
-									<strong>Regimen fiscal</strong>: <span t-field="o.company_id.regimen_fiscal" />
+									<strong>Regimen fiscal</strong>: <span t-field="o.company_id.regimen_fiscal_id.code" />
 								</div>
 								</t>
 						</div>
@@ -126,14 +126,7 @@
 								<t t-if="not o.factura_cfdi">
 									<strong>Nota de venta:</strong>
 								</t>
-								<strong>
-								     <t t-if="not o.journal_id.serie_diario">
-                                        <span t-if="o.company_id.serie_factura" t-field="o.company_id.serie_factura" />
-								     </t>
-								     <t t-if="o.journal_id.serie_diario">
-                                        <span t-field="o.journal_id.serie_diario" />
-								     </t>
-                                </strong>
+								<strong><span t-if="not o.serie_emisor=='false'" t-field="o.serie_emisor" /></strong>
 								<span t-field="o.number_folio" />
 							</div>
 							<div>
@@ -148,12 +141,7 @@
 							</div>
 							<div>
 								<strong>Lugar de expedición: </strong>
-								<t t-if="o.journal_id.codigo_postal">
-								    <span t-field="o.journal_id.codigo_postal"/>
-								</t>
-								<t t-if="not o.journal_id.codigo_postal">
-								    <span t-field="o.company_id.partner_id.zip"/>
-								</t>
+								<span t-field="o.company_id.partner_id.zip"/>
 							</div>
 							<div>
 								<t t-if="o.factura_cfdi">
@@ -173,11 +161,8 @@
 						    	 <div>
 								    <span t-field="o.partner_id.rfc" />
 								</div>
-								<div>
-						     		Regimen fiscal: <span t-field="o.partner_id.regimen_fiscal"/> C.P <span t-field="o.partner_id.zip"/>
-						 	 	</div>
 							     <div>
-						    	    Uso CFDI: <span t-field="o.uso_cfdi" />
+						    	    Uso CFDI: <span t-field="o.uso_cfdi_id.code" />
 						         </div>
 						    </t>
 						</div>
@@ -359,11 +344,11 @@
 								<td >
 									<span t-field="o.methodo_pago" />
 								</td>
-					                        <td>
-									<strong>Fecha y hora de certificación</strong>
+								<td>
+									<strong>Régimen fiscal</strong>
 								</td>
 								<td >
-									<span t-field="o.fecha_certificacion" />
+									<span t-field="o.company_id.regimen_fiscal_id.code" />
 								</td>
 							</tr>
 							<tr>
@@ -371,7 +356,7 @@
 									<strong>Forma de pago</strong>
 								</td>
 								<td >
-									<span t-field="o.forma_pago" />
+									<span t-field="o.forma_pago_id.code" />
 								</td>
 								<td>
 									<strong>Número de certificado</strong>
@@ -406,6 +391,15 @@
 								</td>
 								<td >
 									<span t-field="o.folio_fiscal" />
+								</td>
+							</tr>
+							<tr>
+								<td></td><td></td>
+								<td>
+									<strong>Fecha y hora de certificación</strong>
+								</td>
+								<td >
+									<span t-field="o.fecha_certificacion" />
 								</td>
 							</tr>
 						</table>

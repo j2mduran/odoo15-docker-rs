@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from odoo import models,fields,api, _
-from odoo.exceptions import Warning
+from odoo.exceptions import UserError, Warning
 import os
 from lxml import etree
 import base64
@@ -24,10 +24,10 @@ class import_account_payment_from_xml(models.TransientModel):
     def import_xml_file_button(self):
         self.ensure_one()
         if not self.import_file:
-            raise Warning("Seleccione primero el archivo.")
+            raise UserError(_('Seleccione primero el archivo.'))
         p, ext = os.path.splitext(self.file_name)
         if ext[1:].lower() !='xml':
-            raise Warning(_("Formato no soportado \"{}\", importa solo archivos XML").format(self.file_name))
+            raise UserError(_("Formato no soportado \"{}\", importa solo archivos XML").format(self.file_name))
         
         file_content = base64.b64decode(self.import_file)
         tree = etree.fromstring(file_content)
@@ -44,10 +44,10 @@ class import_account_payment_from_xml(models.TransientModel):
         self.ensure_one()
         invoice_id = self.env['account.move'].browse(self._context.get('active_id'))
         if not self.import_file:
-            raise Warning("Seleccione primero el archivo.")
+            raise UserError(_('Seleccione primero el archivo.'))
         p, ext = os.path.splitext(self.file_name)
         if ext[1:].lower() !='xml':
-            raise Warning(_("Formato no soportado \"{}\", importa solo archivos XML").format(self.file_name))
+            raise UserError(_("Formato no soportado \"{}\", importa solo archivos XML").format(self.file_name))
 
         file_content = base64.b64decode(self.import_file)
         xml_data = etree.fromstring(file_content)
@@ -88,8 +88,8 @@ class import_account_payment_from_xml(models.TransientModel):
         cargar_values = {
             'total_factura': xml_data.attrib['Total'],
             'methodo_pago': 'MetodoPago' in xml_data.attrib and xml_data.attrib['MetodoPago'] or '',
-            'forma_pago' : 'FormaPago' in xml_data.attrib and xml_data.attrib['FormaPago'] or '',
-            'uso_cfdi': Receptor.attrib['UsoCFDI'],
+            'forma_pago_id' : 'FormaPago' in xml_data.attrib and  self.env['catalogo.forma.pago'].sudo().search([('code','=',xml_data.attrib['FormaPago'])]) or '',
+            'uso_cfdi_id': self.env['catalogo.uso.cfdi'].sudo().search([('code','=',Receptor.attrib['UsoCFDI'])]),
             'folio_fiscal' : TimbreFiscalDigital.attrib['UUID'],
             'tipo_comprobante': xml_data.attrib['TipoDeComprobante'],
             'fecha_factura': xml_data.attrib['Fecha'] and parse(xml_data.attrib['Fecha']).strftime(DEFAULT_SERVER_DATETIME_FORMAT) or False,
@@ -130,7 +130,7 @@ class import_account_payment_from_xml(models.TransientModel):
                                                 ('tipo_factor','=',traslado.attrib['TipoFactor']), ('amount', '=', tasa), 
                                                 ('company_id','=',self.env.company.id)],limit=1)
                     if not tax_exist:
-                       raise Warning(_("Un impuesto en el XML no está configurado en el sistema"))
+                       raise UserError(_("Un impuesto en el XML no está configurado en el sistema"))
 
                     if 'Importe' in traslado.attrib:
                        importe = traslado.attrib['Importe']
@@ -158,7 +158,7 @@ class import_account_payment_from_xml(models.TransientModel):
                                                 ('tipo_factor','=',retencion.attrib['TipoFactor']), ('amount', '=', tasa), 
                                                 ('company_id','=',self.env.company.id)],limit=1)
                     if not tax_exist:
-                       raise Warning(_("Un impuesto en el XML no está configurado en el sistema"))
+                       raise UserError(_("Un impuesto en el XML no está configurado en el sistema"))
 
                     if 'Importe' in retencion.attrib:
                        importe = retencion.attrib['Importe']
